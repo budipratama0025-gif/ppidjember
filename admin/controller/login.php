@@ -1,31 +1,66 @@
+
 <?php
-	@session_start();
-	// session_start();
-	include '../engine/configdb.php';
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
 
-	if(isset($_POST['btn-login'])){
-		$username = trim($_POST['username']);
-		$user_password = trim($_POST['password']);
-		$password = base64_encode($user_password);
-		$statusskpd = trim('AKTIF');
+require_once __DIR__ . '/../engine/configdb.php';
 
-		try
-			{ 
-				$stmt = $db_con->prepare("SELECT user.USERID, user.USERNAME, user.USER_PASSWORD, skpd.STATUS  FROM user INNER JOIN skpd ON user.IDSKPD = skpd.IDSKPD WHERE user.USERNAME=:name");
-				$stmt->execute(array(":name"=>$username));
-				$row = $stmt->fetch(PDO::FETCH_ASSOC);
-				$count = $stmt->rowCount();
+if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_POST['btn-login'])) {
+    http_response_code(405);
+    exit('Permintaan tidak diizinkan.');
+}
 
-				if($row['USER_PASSWORD']==$password && $row['STATUS']==$statusskpd){
-					echo "TRUE"; // log in
-					$_SESSION['USER_SESSION'] = $row['USERID'];
-				}else{
-					echo "Nama Pengguna atau Kata Sandi Tidak Terdaftar, atau SKPD Sudah Tidak Aktif, Silahkan bertanya kepada IT Support Jika Mengalami Kendala"; // wrong details 
-				}
-			}
-		catch(PDOException $e){
-			echo $e->getMessage();
-		}
-	}
+$username = trim((string)($_POST['username'] ?? ''));
+$userPassword = (string)($_POST['password'] ?? '');
+
+if ($username === '' || $userPassword === '') {
+    http_response_code(400);
+    exit('Nama pengguna dan kata sandi wajib diisi.');
+}
+
+try {
+    $stmt = $db_con->prepare(
+        'SELECT user.USERID, user.USERNAME, user.USER_PASSWORD,
+                skpd.STATUS
+         FROM user
+         INNER JOIN skpd ON user.IDSKPD = skpd.IDSKPD
+         WHERE user.USERNAME = :name
+         LIMIT 1'
+    );
+
+    $stmt->execute([':name' => $username]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $storedPassword = (string)($row['USER_PASSWORD'] ?? '');
+    $isHash = $storedPassword !== ''
+        && password_get_info($storedPassword)['algo'] !== null;
+
+    $passwordValid = $isHash
+        ? password_verify($userPassword, $storedPassword)
+        : hash_equals($storedPassword, base64_encode($userPassword));
+
+    if (
+        !$row ||
+        !$passwordValid ||
+        ($row['STATUS'] ?? '') !== 'AKTIF'
+    ) {
+        http_response_code(401);
+        exit('Nama pengguna atau kata sandi salah, atau unit kerja tidak aktif.');
+    }
+
+    if (!session_regenerate_id(true)) {
+        http_response_code(500);
+        exit('Login gagal. Silakan coba kembali.');
+    }
+
+    $_SESSION['USER_SESSION'] = $row['USERID'];
+
+    echo 'TRUE';
+
+} catch (Throwable $e) {
+    error_log('PPID login error: ' . $e->getMessage());
+    http_response_code(500);
+    exit('Terjadi gangguan sistem. Silakan coba kembali.');
+}
 ?>
-
